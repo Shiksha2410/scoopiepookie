@@ -8,98 +8,40 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
 );
 
-const products = [
-  {
-    id: 1,
-    name: "Cute Mini Hamper",
-    price: 399,
-    image: "/products/1.jpg",
-    category: "Hampers",
-  },
-  {
-    id: 2,
-    name: "Cute Anti Tarnis Hamper",
-    price: 799,
-    image: "/products/2.jpg",
-    category: "Hampers",
-  },
-  {
-    id: 3,
-    name: "Mega Hamper",
-    price: 1199,
-    image: "/products/3.jpg",
-    category: "Hampers",
-  },
-  {
-    id: 4,
-    name: "Pookie Hamper",
-    price: 499,
-    image: "/products/4.jpg",
-    category: "Hampers",
-  },
-  {
-    id: 5,
-    name: "Birthday Hamper",
-    price: 1299,
-    image: "/products/5.jpg",
-    category: "Hampers",
-  },
-  {
-    id: 6,
-    name: "Anti Tarnish Chain",
-    price: 200,
-    image: "/products/6.jpg",
-    category: "Chains",
-  },
-  {
-    id: 7,
-    name: "Insta Viral Heart Chain",
-    price: 150,
-    image: "/products/7.jpg",
-    category: "Chains",
-  },
-  {
-    id: 8,
-    name: "Heart Chain",
-    price: 200,
-    image: "/products/8.jpg",
-    category: "Chains",
-  },
-  {
-    id: 9,
-    name: "Anti Tarnish Earrings",
-    price: 150,
-    image: "/products/9.jpg",
-    category: "Earrings",
-  },
-  {
-    id: 10,
-    name: "Anti Tarnish Rings",
-    price: 110,
-    image: "/products/10.jpg",
-    category: "Rings",
-  },
-];
+type Product = {
+  id: string;
+  name: string;
+  price: number;
+  image: string;
+  description?: string | null;
+  category: string;
+};
 
-type Product = (typeof products)[number];
 type CartItem = Product & { quantity: number };
-
-const categories = [
-  "All Products",
-  "Hampers",
-  "Chains",
-  "Earrings",
-  "Rings",
-];
 
 const UPI_ID = "shikshakatiyar800@oksbi";
 const UPI_NAME = "Scoopie Pookie";
 
 export default function Home() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productsLoading, setProductsLoading] = useState(true);
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [activeCategory, setActiveCategory] = useState("All Products");
+  const categories = useMemo(() => {
+    const uniqueCategories = Array.from(
+      new Set(
+        products
+          .map((product) => product.category?.trim())
+          .filter(Boolean)
+      )
+    ) as string[];
+
+    return ["All Products", ...uniqueCategories];
+  }, [products]);
+
 
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -109,21 +51,62 @@ export default function Home() {
 
   const [orderSaving, setOrderSaving] = useState(false);
   const [paymentStarted, setPaymentStarted] = useState(false);
+  const [paymentScreenshot, setPaymentScreenshot] = useState<File | null>(null);
+  const [paymentScreenshotPreview, setPaymentScreenshotPreview] = useState("");
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
   const [whatsappSent, setWhatsappSent] = useState(false);
+
+  useEffect(() => {
+    const loadProducts = async () => {
+      setProductsLoading(true);
+
+      const { data, error } = await supabase
+        .from("products")
+        .select("id, name, price, description, image_url, category, is_active")
+        .eq("is_active", true)
+        .order("name");
+
+      if (error) {
+        console.error("Products load failed:", error);
+        setProducts([]);
+      } else {
+        const mappedProducts: Product[] = (data ?? []).map((item) => ({
+          id: String(item.id),
+          name: item.name,
+          price: Number(item.price),
+          image: item.image_url || "/background.png",
+          description: item.description,
+          category: item.category || "Other",
+        }));
+
+        setProducts(mappedProducts);
+      }
+
+      setProductsLoading(false);
+    };
+
+    loadProducts();
+  }, []);
 
   /*
    * After login:
    * If a product was waiting to be added, add it automatically.
    */
   useEffect(() => {
+    const pendingPayment = sessionStorage.getItem("scoopiePaymentStarted");
+
+    if (pendingPayment === "true") {
+      setPaymentStarted(true);
+    }
+
     const pendingProductId = sessionStorage.getItem("pendingProductId");
 
-    if (!pendingProductId) {
+    if (!pendingProductId || !products.length) {
       return;
     }
 
     const product = products.find(
-      (item) => item.id === Number(pendingProductId)
+      (item) => item.id === pendingProductId
     );
 
     if (product) {
@@ -142,18 +125,17 @@ export default function Home() {
       });
 
       setCartOpen(true);
+      sessionStorage.removeItem("pendingProductId");
+      sessionStorage.removeItem("loginReturn");
     }
-
-    sessionStorage.removeItem("pendingProductId");
-    sessionStorage.removeItem("loginReturn");
-  }, []);
+  }, [products]);
 
   const filteredProducts = useMemo(
     () =>
       activeCategory === "All Products"
         ? products
         : products.filter((p) => p.category === activeCategory),
-    [activeCategory]
+    [activeCategory, products]
   );
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -201,7 +183,7 @@ export default function Home() {
     addToCart(product);
   };
 
-  const changeQuantity = (id: number, amount: number) => {
+  const changeQuantity = (id: string, amount: number) => {
     setCart((current) =>
       current
         .map((item) =>
@@ -214,11 +196,11 @@ export default function Home() {
   };
 
 
-  const getProductQuantity = (id: number) => {
+  const getProductQuantity = (id: string) => {
     return cart.find((item) => item.id === id)?.quantity ?? 0;
   };
 
-  const removeFromCart = (id: number) => {
+  const removeFromCart = (id: string) => {
     setCart((current) => current.filter((item) => item.id !== id));
   };
 
@@ -246,7 +228,27 @@ export default function Home() {
       `&tn=${encodeURIComponent("Scoopie Pookie Order")}`;
 
     setPaymentStarted(true);
+    sessionStorage.setItem("scoopiePaymentStarted", "true");
     window.location.href = upiUrl;
+  };
+
+  const handlePaymentScreenshot = (file: File | null) => {
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Please upload a payment screenshot image.");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Screenshot should be 5 MB or smaller.");
+      return;
+    }
+
+    setPaymentScreenshot(file);
+
+    const previewUrl = URL.createObjectURL(file);
+    setPaymentScreenshotPreview(previewUrl);
   };
 
   const placeOrderOnWhatsApp = async () => {
@@ -266,6 +268,16 @@ export default function Home() {
       return;
     }
 
+    if (!paymentStarted) {
+      alert("Please complete the UPI payment first.");
+      return;
+    }
+
+    if (!paymentScreenshot) {
+      alert("Please upload your payment screenshot before placing the order.");
+      return;
+    }
+
     const items = cart
       .map(
         (item) =>
@@ -278,7 +290,38 @@ export default function Home() {
     setOrderSaving(true);
 
     try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        alert("Please login before placing your order.");
+        return;
+      }
+
+      setUploadingScreenshot(true);
+
+      const fileExtension =
+        paymentScreenshot.name.split(".").pop()?.toLowerCase() || "jpg";
+
+      const screenshotPath = `${user.id}/${Date.now()}-${crypto.randomUUID()}.${fileExtension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("payment-screenshots")
+        .upload(screenshotPath, paymentScreenshot, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error("Payment screenshot upload failed:", uploadError);
+        alert("Payment screenshot upload nahi ho paya. Please try again.");
+        return;
+      }
+
       const { error } = await supabase.from("orders").insert({
+        user_id: user.id,
         customer_name: customerName.trim(),
         phone: customerPhone.trim(),
         address: customerAddress.trim(),
@@ -286,7 +329,8 @@ export default function Home() {
         pin: customerPincode.trim(),
         items,
         total: cartTotal,
-        payment_status: paymentStarted ? "Paid / UPI" : "Pending / UPI",
+        payment_screenshot_url: screenshotPath,
+        payment_status: "Payment Verification Pending",
         order_status: "New",
       });
 
@@ -295,6 +339,8 @@ export default function Home() {
         alert("Order could not be saved. Please try again.");
         return;
       }
+
+      setUploadingScreenshot(false);
 
       const message =
         `🛍️ *New Order - ScoopiePookie*\n\n` +
@@ -332,8 +378,12 @@ export default function Home() {
       setCustomerPincode("");
 
       setPaymentStarted(false);
+      setPaymentScreenshot(null);
+      setPaymentScreenshotPreview("");
+      sessionStorage.removeItem("scoopiePaymentStarted");
     } finally {
       setOrderSaving(false);
+      setUploadingScreenshot(false);
     }
   };
 
@@ -384,22 +434,30 @@ export default function Home() {
               Contact
             </a>
           </nav>
-           <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+
+  <a
+    href="/my-orders"
+    className="rounded-full bg-[#35154f] px-4 py-2.5 text-xs font-black text-white shadow-md transition hover:bg-[#8b3aa6] sm:px-5 sm:text-sm"
+  >
+    ♡ My Orders
+  </a>
+          <div className="flex items-center gap-2">
             <a
               href="/login"
-              className="rounded-full bg-[#35154f] px-4 py-2.5 text-xs font-black text-white shadow-md transition hover:-translate-y-0.5 hover:bg-[#8b3aa6] sm:px-5 sm:text-sm"
+              className="rounded-full bg-[#35154f] px-4 py-2.5 text-xs font-black text-white shadow-md transition hover:bg-[#8b3aa6] sm:px-5 sm:text-sm"
             >
               ♡ Login
             </a>
 
             <button
               onClick={() => setCartOpen(true)}
-              className="relative rounded-full bg-[#35154f] px-4 py-2.5 text-xs font-black text-white shadow-md transition hover:-translate-y-0.5 hover:bg-[#8b3aa6] sm:px-5 sm:text-sm"
+              className="relative rounded-full bg-[#35154f] px-4 py-2.5 text-xs font-black text-white shadow-md transition hover:bg-[#8b3aa6] sm:px-5 sm:text-sm"
             >
               🛒 Cart ({cartCount})
             </button>
           </div>
-          
+          </div>
         </div>
       </header>
 
@@ -540,8 +598,23 @@ export default function Home() {
           ))}
         </div>
 
-        <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
-          {filteredProducts.map((product) => (
+        {productsLoading ? (
+          <div className="mt-10 rounded-3xl border border-[#ead8ef] bg-white p-10 text-center shadow-sm">
+            <div className="text-3xl">♡</div>
+            <p className="mt-3 text-sm font-black text-[#35154f]">
+              Loading our cute collection...
+            </p>
+          </div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="mt-10 rounded-3xl border border-[#ead8ef] bg-white p-10 text-center shadow-sm">
+            <div className="text-3xl">🛍️</div>
+            <p className="mt-3 text-sm font-black text-[#35154f]">
+              No products available right now.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
+            {filteredProducts.map((product) => (
             <article
               key={product.id}
               className="group overflow-hidden rounded-[1.35rem] border border-[#ead8ef] bg-white shadow-sm transition duration-300 hover:-translate-y-1 hover:shadow-xl"
@@ -604,8 +677,9 @@ export default function Home() {
                 )}
               </div>
             </article>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* CONTACT */}
@@ -915,21 +989,79 @@ export default function Home() {
               </p>
             </div>
 
+            {/* PAYMENT SCREENSHOT */}
+            <div className="mt-4 rounded-2xl border border-[#d8c0df] bg-white p-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-[#7d2a99]">
+                  Payment Screenshot *
+                </p>
+                <p className="mt-1 text-xs leading-5 text-gray-500">
+                  UPI payment complete karne ke baad payment success screenshot
+                  upload karein. Screenshot admin payment verification ke liye
+                  use hoga.
+                </p>
+              </div>
+
+              <label className="mt-3 flex cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-[#d8c0df] bg-[#fbf5fd] px-4 py-5 text-center transition hover:bg-[#f5e8fa]">
+                <div>
+                  <div className="text-3xl">📸</div>
+                  <p className="mt-2 text-sm font-black text-[#6d2b80]">
+                    {paymentScreenshot ? "Change Screenshot" : "Upload Payment Screenshot"}
+                  </p>
+                  <p className="mt-1 text-[10px] text-gray-500">
+                    JPG, PNG • Max 5 MB
+                  </p>
+                </div>
+
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) =>
+                    handlePaymentScreenshot(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+
+              {paymentScreenshotPreview && (
+                <div className="mt-3 rounded-2xl border border-[#ead8ef] bg-[#fffaff] p-3">
+                  <img
+                    src={paymentScreenshotPreview}
+                    alt="Payment screenshot preview"
+                    className="mx-auto max-h-64 rounded-xl object-contain"
+                  />
+                  <p className="mt-2 text-center text-xs font-bold text-green-600">
+                    ✓ Screenshot selected
+                  </p>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={placeOrderOnWhatsApp}
-              disabled={orderSaving || !paymentStarted}
-              className="mt-4 w-full rounded-full bg-[#25D366] py-4 text-sm font-black text-white shadow-lg transition hover:bg-[#1ebe5d] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={
+                orderSaving ||
+                uploadingScreenshot ||
+                !paymentStarted ||
+                !paymentScreenshot
+              }
+              className="mt-4 w-full rounded-full bg-[#35154f] py-4 text-sm font-black text-white shadow-lg transition hover:bg-[#8b3aa6] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {orderSaving
-                ? "Saving Order…"
-                : paymentStarted
-                  ? "💬 Send Order Details on WhatsApp"
-                  : "🔒 Pay via UPI First"}
+              {uploadingScreenshot
+                ? "Uploading Screenshot…"
+                : orderSaving
+                  ? "Placing Order…"
+                  : !paymentStarted
+                    ? "🔒 Pay via UPI First"
+                    : !paymentScreenshot
+                      ? "📸 Upload Screenshot First"
+                      : "🛍️ Place Order"}
             </button>
 
-            <p className="mt-3 text-center text-[10px] text-gray-500">
-              Payment is not automatically verified by this website. Confirm
-              the actual credit in your UPI/bank app.
+            <p className="mt-3 text-center text-[10px] leading-4 text-gray-500">
+              Your order will be placed as <b>Payment Verification Pending</b>.
+              Admin will verify the payment screenshot before confirming the
+              payment.
             </p>
           </div>
         </div>
